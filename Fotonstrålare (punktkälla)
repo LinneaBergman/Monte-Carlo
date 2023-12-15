@@ -1,0 +1,55 @@
+
+    fotoner = 100;  % Antal fotoner
+    
+    % Koordinat-vektorer
+    x = zeros(fotoner);  % X-koordinat
+    y = zeros(fotoner);  % Y-koordinat
+    z = zeros(fotoner);  % Z-koordinat
+    
+    % Simulerings-loop för varje foton
+    for foton = 1:fotoner
+        fotonenergi = 100; %varje foton har 100 keV
+        % Alla fotoner börjar i origo
+        x(foton, 1) = 0;
+        y(foton, 1) = 0;
+        z(foton, 1) = 0;
+        
+        % Fotonens rörelse
+            steg = 1; %Visar vilket steg den är på
+        while fotonenergi > 5 %Sätter gränsen på 5 keV. Alltså försvinner fotonen när den har mindre energi än så
+            steglangd = -log(rand())/0.1707;  % Steglängd. Använder massattenueringskoefficienten för vatten
+            % Skapar slumpmässig riktning
+            theta = 2 * pi * rand();  % Slumpmässig vinkel mellan 0 och 2pi
+            phi = pi * rand();  % Slumpmässig vinkel mellan 0 och pi
+           
+            % Fotonen flyttas
+            x(foton, steg+1) = x(foton, steg) + steglangd * sin(phi) * cos(theta);
+            y(foton, steg+1) = y(foton, steg) + steglangd * sin(phi) * sin(theta);
+            z(foton, steg+1) = z(foton, steg) + steglangd * cos(phi);
+            
+            deltaW = (0.1/0.1707)*fotonenergi;%Energin som fotonen minskar med vid varje steg
+            fotonenergi = fotonenergi-deltaW; %Fotonens nya energi
+            steg = steg+1;
+        end 
+    end
+
+    % Plotta fotonernas rörelse i 3D
+    figure;
+    for foton = 1:fotoner
+        plot3(x(foton, 1:steg), y(foton, 1:steg), z(foton, 1:steg), 'b.-');
+        hold on;    
+    end
+
+    % Lägger en röd prick i origo
+    scatter3(0, 0, 0, 25, 'r', 'filled'); % storlek = 25
+
+    hold off;
+    
+    
+    axis equal;
+    title('Punktkälla med fotoner (3D)');
+    xlabel('X-koordinat');
+    ylabel('Y-koordinat');
+    zlabel('Z-koordinat');
+    
+
