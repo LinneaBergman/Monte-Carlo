@@ -1,0 +1,9 @@
+       %Fotonerna tar det första steget i en slumpmässig riktning
+         steglangd = -log(rand())/0.1707; 
+                   % Skapar slumpmässig riktning
+            theta = 2 * pi * rand();  % Slumpmässig vinkel mellan 0 och 2pi
+            phi = pi * rand();  % Slumpmässig vinkel mellan 0 och pi
+         
+            x(foton, steg+1) = x(foton, steg) + steglangd * sin(phi) * costheta;
+            y(foton, steg+1) = y(foton, steg) + steglangd * sin(phi) * sin(theta);
+            z(foton, steg+1) = z(foton, steg) + steglangd * cos(phi);
