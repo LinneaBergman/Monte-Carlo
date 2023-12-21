@@ -1,6 +1,11 @@
 format long;
 A = table2array(readtable("Attenueringsdata.xlsx"));
-T = readtable("Tvärsnitt_soft_tissue.xlsx");
+T = table2array(readtable("SOFT_TISSUE_TVÄRSNITT.xlsx"));
+% Detect import options to automatically determine data types
+opts = detectImportOptions("Tvärsnitt_soft_tissue.xlsx");
+    
+% Read the table using the detected import options
+%T = readtable("Tvärsnitt_soft_tissue.xlsx", opts);
 %idx=find(unique(T(:,1)));
 %T=T(idx,:);
 fotoner = 10;  % Antal fotoner
@@ -14,17 +19,17 @@ z = zeros(fotoner);  % Z-koordinat
 for foton = 1:fotoner
     energibestamning = rand(); %Slumpar ett tal som bestämmer vilken energi fotonen får
     if 0 < energibestamning & energibestamning < 0.00854;
-        fotonenergi = 71.6;  %Olika sannolikheter för olika fotonenergier enl. sönderfallsdata
+        fotonenergi = 71600;  %Olika sannolikheter för olika fotonenergier enl. sönderfallsdata
     elseif 0.00854 < energibestamning & energibestamning < 0.36354;
-        fotonenergi = 113;
+        fotonenergi = 113000;
     elseif 0.36354 < energibestamning & energibestamning < 0.3662;
-        fotonenergi = 137;
+        fotonenergi = 137000;
     elseif 0.3662 < energibestamning & energibestamning < 0.9762;
-        fotonenergi = 208;
+        fotonenergi = 208000;
     elseif 0.9762 < energibestamning & energibestamning < 0.995;
-        fotonenergi = 250;
+        fotonenergi = 250000;
     elseif 0.995 < energibestamning & energibestamning < 1;
-        fotonenergi = 321;
+        fotonenergi = 321000;
     end
     
     
@@ -48,8 +53,28 @@ for foton = 1:fotoner
     
     %Använder tabellen Attenueringsdata och Tvärsnitt för att välja vilke vxv som ska ske
     T;
+    energivarden_tvarsnitt = T(:,1);
+    rayleigh_varden = T(:,2);
+    compton_varden = T(:,3);
+    fotoel_varden = T(:,4);
+    % Hittar index på de närmsta energierna
+    [~, index1] = min(abs(T(:,1) - fotonenergi));
+    index2 = index1 + 1;
+    % Linjärinterpolation
+    x1 = energivarden_tvarsnitt(index1);
+    x2 = energivarden_tvarsnitt(index2);
+    r1 = rayleigh_varden(index1);  %Värdena på Rayleigh
+    r2 = rayleigh_varden(index2);
+    c1 = compton_varden(index1); %Värden på Compton
+    c2 = compton_varden(index2);
+    f1 = fotoel_varden(index1); %Värden på fotoelektrisk effekt
+    f2 = fotoel_varden(index2);
     
-    while fotonenergi > 5 %Sätter gränsen på 5 keV. Alltså försvinner fotonen när den har mindre energi än så
+    tvarsnitt_Rayleigh = r1 + (fotonenergi - x1) * (r2 - r1) / (x2 - x1);
+    tvarsnitt_Compton = c1 + (fotonenergi - x1) * (c2 - c1) / (x2 - x1);
+    tvarsnitt_fotoel = f1 + (fotonenergi - x1) * (f2 - f1) / (x2 - x1);
+    
+    while fotonenergi > 50 %Sätter gränsen på 50 eV. Alltså försvinner fotonen när den har mindre energi än så
         alpha = fotonenergi/511; %alpha är fotonenergin i elektronmassor
         steglangd = -log(rand())/0.1707;  % Steglängd. Använder massattenueringskoefficienten för vatten
         %Lista från Kahn
