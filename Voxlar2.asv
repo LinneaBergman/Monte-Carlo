@@ -1,0 +1,369 @@
+format long;
+A = table2array(readtable("Attenueringsdata.xlsx"));  %Läser in tabelldata
+AA = str2double(A); %Gör till en double
+AA(:,1) = AA(:,1)*1000;
+energivarden_attenuering = AA(:,1);
+T = table2array(readtable("SOFT_TISSUE_TVÄRSNITT.xlsx"));
+energivarden_tvarsnitt = T(:,1); 
+rayleigh_varden = T(:,2); %Värden på de olika tvärsnitten
+compton_varden = T(:,3);
+fotoel_varden = T(:,4);
+fotoner = 10;  % Antal fotoner
+depo = 0; %Total deponerad energi i vänster cortex
+
+%VOXLAR
+% Define the file path and file properties
+file_path = 'C:\Users\Hule-Elev\Documents\MATLAB\Monte Carlo\FullPhantom.bin';
+X = 256; % Replace with your desired dimensions
+Y = 256;
+Z = 1200;
+voxelSize = 0.15; % cm
+% Open the binary file for reading
+fid = fopen(file_path, 'rb');
+if fid == -1
+error('Could not open the file.');
+end
+% Read the binary data
+raw_data = fread(fid, X * Y * Z, 'single', 0, 'ieee-le');
+% Close the file
+fclose(fid);
+% Reshape the raw data into a 3D array
+array_3d = reshape(raw_data, [X, Y, Z]);
+buk = array_3d(:, :, 731:821);% Delar av fantomet med njurar
+vanster_njure = find(buk == 20); %Linjär lista med alla voxlar i vänster njure
+hoger_njure = find(buk == 17); %Samma med höger
+[right_x, right_y, right_z] = ind2sub(size(buk), hoger_njure); %gör koordinatmatris för alla voxlar
+[left_x, left_y, left_z] = ind2sub(size(buk), vanster_njure); %samma som ovan 
+rightkpos = [right_x, right_y, right_z]; %döper matris
+leftkpos = [left_x, left_y, left_z]; %nu har vi matris med koordinater för varje voxel i höger cortex samt vänster
+
+rader = size(rightkpos, 1); %Antal voxlar i höger cortex
+slumppos = randi(rader, 1, fotoner); %Radvektor med slumpade positioner i höger cortex, lika lång som antalet fotoner
+fotonposition = rightkpos(slumppos,:); %En matris med slumpade positioner i höger cortex
+
+% Koordinat-vektorer
+x = zeros(fotoner);  % X-koordinat
+y = zeros(fotoner);  % Y-koordinat
+z = zeros(fotoner);  % Z-koordinat
+
+% Simulerings-loop för varje foton
+for foton = 1:fotoner
+    P = 0; %Koordinaterna för en foton vid varje steg
+    theta_old = acos(2*rand-1); % Polarvinkel
+    fi_old = rand*2*pi; % Azimuthalvinkel
+    [fotonenergi] = bestamma_fotonenergi(); %Funktion som bestämmer fotonens energi
+    steg = 1; %Visar vilket steg den är på
+    
+    % Alla fotoner börjar i höger njure
+    startx = fotonposition(foton,1);%Start X-koordinat i höger cortex
+    starty = fotonposition(foton,2);%Start Y-koordinat
+    startz = fotonposition(foton,3);%Start Z-koordinat
+    x_1 = 0; %Nästa steg
+    y_1 = 0;
+    z_1 = 0;
+    
+    % Första riktningen
+    u_0 = sin(theta_old)*cos(fi_old);
+    v_0 = sin(theta_old)*sin(fi_old);
+    w_0 = cos(theta_old);
+    %Fotonerna tar en slumpmässig riktning i början
+    [theta, phi] = vinkel();
+    [Mu_max] = Mumax(fotonenergi, AA);
+    stegl = -log(rand())/Mu_max; %Längden på första steget
+    
+    % Första steget
+    x_0 = startx + stegl*u_0;
+    y_0 = starty + stegl*v_0;
+    z_0 = startz + stegl*w_0;
+    Avrunda = [round(x_0), round(y_0), round(z_0)];
+    Kroppsdel = buk(Avrunda(1), Avrunda(2), Avrunda(3)); %Ger vilket index voxeln har
+    
+    % Fotonen flyttas
+    x(foton, steg+1) = x_0;
+    y(foton, steg+1) = y_0;
+    z(foton, steg+1) = z_0;
+    
+    steg = steg + 1;
+    while fotonenergi > 50 %Sätter gränsen på 50 eV. Alltså försvinner fotonen när den har mindre energi än så
+        
+        %Kollar vilken kroppsdel vi är i
+        Kroppsdel = buk(Avrunda(1), Avrunda(2), Avrunda(3)); %Ger vilket index voxeln har
+        [Mu] = Bestamma_kroppsdel(Kroppsdel, AA);
+        [Mu_energi] = Attenueringskonstant(fotonenergi, AA, Mu, energivarden_attenuering);
+        [Mu_max] = Mumax(fotonenergi, AA);
+        S = rand();
+        %Bestämmer om det sker vxv eller ej
+        if S <= Mu_energi/Mu_max
+            [tvarsnitt_Compton, tvarsnitt_Rayleigh, tvarsnitt_fotoel] = tvarsnitt(fotonenergi, T, energivarden_tvarsnitt, rayleigh_varden, compton_varden, fotoel_varden);
+            summa = tvarsnitt_Compton + tvarsnitt_Rayleigh + tvarsnitt_fotoel;
+            R = rand();
+            if R <= tvarsnitt_fotoel/summa
+                %Fotoelektrisk effekt. 
+                %Om det sker i vänster cortex läggs det till i
+                %energideponering
+                if Kroppsdel == 20
+                    depo = depo + fotonenergi;
+                end
+                fotonenergi = 0;
+                
+            elseif R <= (tvarsnitt_fotoel + tvarsnitt_Compton)/summa
+                %Compton
+                [fotonenergi, costheta, energi_andring] = Compton(fotonenergi);
+                theta_new = costheta;
+                fi_new = rand*2*pi;
+                [phi, theta] = vinkel();
+                
+                %Fotonen flyttas
+                [Mu_max] = Mumax(fotonenergi, AA);
+                stegl = -log(rand())/Mu_max;
+                [fi_old, theta_old, x_0,y_0, z_0, u_0, v_0, w_0] = rotera(theta_new, theta_old, fi_new, fi_old, u_0, v_0, w_0, x_0, y_0, z_0, stegl);
+                
+                x(foton, steg+1) = x_0;
+                y(foton, steg+1) = y_0;
+                z(foton, steg+1) = z_0;
+                steg = steg + 1;
+                
+                if Kroppsdel == 20
+                    
+                end
+            else
+                %Rayleigh
+                [costheta] = Rayleigh(fotonenergi);
+                theta_new = costheta;
+                fi_new = rand*2*pi;
+                [phi, theta] = vinkel();
+                
+                %Fotonen flyttas
+                [Mu_max] = Mumax(fotonenergi, AA);
+                stegl = -log(rand())/Mu_max;
+                
+                [fi_old, theta_old, x_0,y_0, z_0, u_0, v_0, w_0] = rotera(theta_new, theta_old, fi_new, fi_old, u_0, v_0, w_0, x_0, y_0, z_0, stegl);
+                
+                x(foton, steg+1) = x_0;
+                y(foton, steg+1) = y_0;
+                z(foton, steg+1) = z_0;
+                steg = steg + 1;
+            end
+        else
+            %Ingen vxv. Energi och riktning hålls konstanta
+            stegl = -log(rand())/Mu_max;
+            % Nästa position
+            x_1 = x_0 + stegl*u_0;
+            y_1 = y_0 + stegl*v_0;
+            z_1 = z_0 + stegl*w_0;
+            
+            % Skriv över gammal vinkel och riktningar
+            x_0 = x_1;
+            y_0 = y_1;
+            z_0 = z_1;
+            
+            x(foton, steg+1) = x_0;
+            y(foton, steg+1) = y_0;
+            z(foton, steg+1) = z_0;
+            steg = steg + 1;
+        end
+        
+        %Kollar om vi är utanför området. Om fotonen lämnat området
+        %försvinner den
+        Avrunda = [round(x_0), round(y_0), round(z_0)];
+        if Avrunda(1) < 1 || Avrunda(1) > 256 || Avrunda(2) < 1 || Avrunda(2) > 256 || Avrunda(3) < 1 || Avrunda(3) > 91
+            fotonenergi = 0;
+        end
+    end
+end
+
+% Plotta fotonernas rörelse i 3D
+figure;
+for foton = 1:fotoner
+    plot3(x(foton, 1:steg), y(foton, 1:steg), z(foton, 1:steg), 'b.-');
+    hold on;
+end
+
+% Lägger en röd prick i origo
+scatter3(0, 0, 0, 25, 'r', 'filled'); % storlek = 25
+
+hold off;
+axis equal;
+title('Punktkälla med fotoner (3D)');
+xlabel('X-koordinat');
+ylabel('Y-koordinat');
+zlabel('Z-koordinat');
+
+%Funktion som bestämmer fotonenergin
+function [fotonenergi] = bestamma_fotonenergi()
+energibestamning = rand();
+if 0 < energibestamning & energibestamning < 0.00854;
+    fotonenergi = 71600;  %Olika sannolikheter för olika fotonenergier enl. sönderfallsdata
+elseif 0.00854 < energibestamning & energibestamning < 0.36354;
+    fotonenergi = 113000;
+elseif 0.36354 < energibestamning & energibestamning < 0.3662;
+    fotonenergi = 137000;
+elseif 0.3662 < energibestamning & energibestamning < 0.9762;
+    fotonenergi = 208000;
+elseif 0.9762 < energibestamning & energibestamning < 0.995;
+    fotonenergi = 250000;
+elseif 0.995 < energibestamning & energibestamning < 1;
+    fotonenergi = 321000;
+end
+end
+
+%Funktion som hittar Mu_max i raden
+function [Mu_max] = Mumax(fotonenergi, AA)
+    Avrundad_energi = round(fotonenergi/500)*500; %Avrundar fotonenergin till närmaste 500-tal
+    if Avrundad_energi < 500
+        Mu_max = max(AA(1,:));
+    else
+        Raden = find(AA == Avrundad_energi, 1); %Hittar raden med fotonenergin
+        Mu_max = max(AA(Raden,2:36)); %Hittar Mu_max i den raden
+    end
+   
+end
+
+%Funktion som avgör vilken attenueringskoefficient som ska användas
+%beroende på kroppsdel
+function [Mu] = Bestamma_kroppsdel(Kroppsdel, AA)
+if Kroppsdel == 6 %Muskler
+    Mu = AA(:,3);
+elseif Kroppsdel >= 27 && Kroppsdel <= 28 %Ryggrad
+    Mu = AA(:,5);
+elseif Kroppsdel == 2 %Blod
+    Mu = AA(:,8);
+elseif Kroppsdel >= 17 && Kroppsdel <= 23 %Njure
+    Mu = AA(:,10);
+elseif Kroppsdel == 9 %Lever
+    Mu = AA(:,11);
+elseif Kroppsdel == 11 %Lunga
+    Mu = AA(:,4);
+elseif Kroppsdel == 25 %Revben
+    Mu = AA(:,6);
+elseif Kroppsdel == 30 %Blåsa
+    Mu = AA(:,36);
+elseif Kroppsdel == 35 %Luft
+    Mu = AA(:,24);
+else
+    Mu = AA(:,2); %Övrigt är vatten?
+end
+end
+
+%Funktion som tar fram attenueringskonstanten för kroppsdel och fotonenergi
+function [Mu_energi] = Attenueringskonstant(fotonenergi, AA, Mu, energivarden_attenuering)
+    % Hittar index på de närmsta energierna
+    [~, index1] = min(abs(AA(:,1) - fotonenergi));
+    index2 = index1 + 1;
+    %Linjärinterpolation
+    x1 = energivarden_attenuering(index1);
+    x2 = energivarden_attenuering(index2);
+    y1 = Mu(index1); %Värden på attenueringskonstant beroende på kroppsdel
+    y2 = Mu(index2);
+    Mu_energi = y1 + (fotonenergi - x1) * (y2 - y1) / (x2 - x1);
+end
+
+%Funktion som ger vinkel
+function [theta, phi] = vinkel()
+     theta = acos(1-2*rand());  % Cosinus av polarvinkeln mellan -1 och 1
+     phi = 2 * pi * rand();       % asimutalvinkeln mellan 0 och 2pi
+end
+
+%Funktion som linjärinterpolerar tvärsnitten
+function [tvarsnitt_Rayleigh, tvarsnitt_Compton, tvarsnitt_fotoel] = tvarsnitt(fotonenergi, T, energivarden_tvarsnitt, rayleigh_varden, compton_varden, fotoel_varden)
+    % Hittar index på de närmsta energierna
+    [~, index1] = min(abs(T(:,1) - fotonenergi));
+    index2 = index1 + 1;
+    % Linjärinterpolation
+    x1 = energivarden_tvarsnitt(index1);
+    x2 = energivarden_tvarsnitt(index2);
+    r1 = rayleigh_varden(index1);  %Värdena på Rayleigh
+    r2 = rayleigh_varden(index2);
+    c1 = compton_varden(index1); %Värden på Compton
+    c2 = compton_varden(index2);
+    f1 = fotoel_varden(index1); %Värden på fotoelektrisk effekt
+    f2 = fotoel_varden(index2);
+    
+    tvarsnitt_Rayleigh = r1 + (fotonenergi - x1) * (r2 - r1) / (x2 - x1);
+    tvarsnitt_Compton = c1 + (fotonenergi - x1) * (c2 - c1) / (x2 - x1);
+    tvarsnitt_fotoel = f1 + (fotonenergi - x1) * (f2 - f1) / (x2 - x1);
+end
+
+%Funktion som ger vinkeln och energiförändring för Compton
+function [costheta,fotonenergi, energi_andring] = Compton(fotonenergi)
+    alpha = fotonenergi/511000; %alpha är fotonenergin i elektronmassor
+    %Lista från Kahn
+    b = 1;
+    while b == 1 %Gör om dessa tills något krav är uppfyllt
+        R1 = rand();
+        R2 = rand();
+        R3 = rand();
+        if R1 <= (2*alpha+1)/(2*alpha+9)
+            eta = 2*alpha*R2;
+            
+            if R3 <= 4*(eta^(-1)-eta^(-2))
+                costheta = 1-2*R2;
+                b = 0;
+            end
+        elseif R1 > (2*alpha+1)/(2*alpha+9)
+            eta = (2*alpha+1)/(2*R2*alpha+1);
+            costheta = 1-(eta-1)/alpha;
+            
+            if R3 <= 0.5*(costheta^2+eta^(-1))
+                b = 0;
+            end
+        end
+        
+    end
+    energi_andring = fotonenergi - fotonenergi/eta; %Energin som deponeras
+    fotonenergi = fotonenergi/eta; %Skriver över fotonenergin med den nya energin
+end
+
+%Funktion som roterar koordinatsystemet och tar nytt steg
+function [fi_old, theta_old, x_0,y_0, z_0, u_0, v_0, w_0] = rotera(theta_new, theta_old, fi_new, fi_old, u_0, v_0, w_0, x_0, y_0, z_0, stegl)
+% Ekvation 7.13 från Bielajew.
+u_1 = u_0*cos(theta_new)+sin(theta_new)*(w_0*cos(fi_new)*cos(fi_old)-sin(fi_new)*sin(fi_old));
+v_1 = v_0*cos(theta_new)+sin(theta_new)*(w_0*cos(fi_new)*sin(fi_old)+sin(fi_new)*cos(fi_old));
+w_1 = w_0*cos(theta_new)-sin(theta_new)*sin(theta_old)*cos(fi_new);
+
+% Nästa position
+x_1 = x_0 + stegl*u_1;
+y_1 = y_0 + stegl*v_1;
+z_1 = z_0 + stegl*w_1;
+
+% Skriv över gammal vinkel och riktningar
+u_0 = u_1;
+v_0 = v_1;
+w_0 = w_1;
+
+x_0 = x_1;
+y_0 = y_1;
+z_0 = z_1;
+
+theta_old = theta_new;
+fi_old = fi_new;
+end
+
+%Funktion som ger vinkeln för Rayleigh
+function [costheta] = Rayleigh(fotonenergi)
+    alpha = fotonenergi/511000; %alpha är fotonenergin i elektronmassor
+    %Lista från Kahn
+    b = 1;
+    while b == 1 %Gör om dessa tills något krav är uppfyllt
+        R1 = rand();
+        R2 = rand();
+        R3 = rand();
+        if R1 <= (2*alpha+1)/(2*alpha+9)
+            eta = 2*alpha*R2;
+            
+            if R3 <= 4*(eta^(-1)-eta^(-2))
+                costheta = 1-2*R2;
+                b = 0;
+            end
+        elseif R1 > (2*alpha+1)/(2*alpha+9)
+            eta = (2*alpha+1)/(2*R2*alpha+1);
+            costheta = 1-(eta-1)/alpha;
+            
+            if R3 <= 0.5*(costheta^2+eta^(-1))
+                b = 0;
+            end
+        end
+        
+    end
+    
+end
