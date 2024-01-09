@@ -1,0 +1,172 @@
+format long;
+elektroner = 1000;  % Antal elektroner
+depo = 0; %Total deponerad energi i vänster cortex
+L = table2array(readtable("Lutetium Decay Data.xlsx"));
+Tvarsnitt = table2array(readtable("TVARSNITT_ELEKTRONER.xlsx"));
+energier = Tvarsnitt(:,1);
+SP = Tvarsnitt(:,5);
+
+
+%VOXLAR
+% Define the file path and file properties
+file_path = 'C:\Users\Hule-Elev\Documents\MATLAB\Monte Carlo\FullPhantom.bin';
+X = 256; % Replace with your desired dimensions
+Y = 256;
+Z = 1200;
+voxelSize = 0.15; % cm
+% Open the binary file for reading
+fid = fopen(file_path, 'rb');
+if fid == -1
+error('Could not open the file.');
+end
+% Read the binary data
+raw_data = fread(fid, X * Y * Z, 'single', 0, 'ieee-le');
+% Close the file
+fclose(fid);
+% Reshape the raw data into a 3D array
+array_3d = reshape(raw_data, [X, Y, Z]);
+buk = array_3d(:, :, 731:821);% Delar av fantomet med njurar
+vanster_njure = find(buk == 20); %Linjär lista med alla voxlar i vänster njure
+[left_x, left_y, left_z] = ind2sub(size(buk), vanster_njure); %Gör koordinatmatris för alla voxlar
+leftkpos = [left_x, left_y, left_z]; %nu har vi matris med koordinater för varje voxel i vänster cortex
+
+rader = size(leftkpos, 1); %Antal voxlar i höger cortex
+slumppos = randi(rader, 1, elektroner); %Radvektor med slumpade positioner i vänster cortex, lika lång som antalet elektroner
+elektronposition = leftkpos(slumppos,:); %En matris med slumpade positioner i höger cortex
+
+% Koordinat-vektorer
+x = zeros(elektroner);  % X-koordinat
+y = zeros(elektroner);  % Y-koordinat
+z = zeros(elektroner);  % Z-koordinat
+
+
+% Simulerings-loop för varje foton
+for elektron = 1:elektroner
+[elektronenergi] = bestamma_elektronenergi(L);
+elektronenergi = elektronenergi*1000000; %Får elektronenergi i eV istället för MeV
+
+%Alla elektroner börjar i vänster cortex
+startx = elektronposition(elektron,1); %Start X-koordinat i vänster cortex
+starty = elektronposition(elektron,2);%Start Y-koordinat
+startz = elektronposition(elektron,3);%Start Z-koordinat
+
+%Startvinklar
+theta_old = acos(1-2*rand());
+fi_old = 2*pi*rand();
+% Första riktningen
+u_0 = sin(theta_old)*cos(fi_old);
+v_0 = sin(theta_old)*sin(fi_old);
+w_0 = cos(theta_old);
+%Första steget
+stegl = 0.02*elektronenergi;
+x_0 = startx + stegl*u_0;
+y_0 = starty + stegl*v_0;
+z_0 = startz + stegl*w_0;
+
+%Kollar vilken kroppsdel vi är i
+Avrunda = [round(x_0), round(y_0), round(z_0)];
+if Avrunda(1) < 1 || Avrunda(1) > 256 || Avrunda(2) < 1 || Avrunda(2) > 256 || Avrunda(3) < 1 || Avrunda(3) > 91
+    elektronenergi = 0;
+else
+    Kroppsdel = buk(Avrunda(1), Avrunda(2), Avrunda(3)); %Ger vilket index voxeln har
+    if Kroppsdel ~= 20 %Elektronen elimineras om den lämnat vänster cortex
+        elektronenergi = 0;
+    end
+end
+
+while elektronenergi > 50
+   
+    %Linjärinterpolation för Stoppingpower
+    [~, index1] = min(abs(Tvarsnitt(:,1) - elektronenergi));
+    index2 = index1 + 1;
+    x1 = energier(index1);
+    x2 = energier(index2);
+    y1 = SP(index1); %Värden på Stopping power beroende på energi
+    y2 = SP(index2);
+    Stoppingpower = y1 + (elektronenergi - x1) * (y2 - y1) / (x2 - x1);
+    
+    %Gångjärnsmetoden enligt PENELOPE-dokument
+    stegl = 0.02*elektronenergi;
+    minskaenergi = stegl*Stoppingpower;
+    elektronenergi = elektronenergi - minskaenergi;
+    tau = stegl*rand();
+    depo = depo + minskaenergi;
+    
+    theta_new = sqrt(-Stoppingpower*log(1-rand()));
+    fi_new = rand()*2*pi;
+    
+    % Ekvation 7.13 från Bielajew.
+    u_1 = u_0*cos(theta_new)+sin(theta_new)*(w_0*cos(fi_new)*cos(fi_old)-sin(fi_new)*sin(fi_old));
+    v_1 = v_0*cos(theta_new)+sin(theta_new)*(w_0*cos(fi_new)*sin(fi_old)+sin(fi_new)*cos(fi_old));
+    w_1 = w_0*cos(theta_new)-sin(theta_new)*sin(theta_old)*cos(fi_new);
+    
+    % Nästa position
+    x_1 = x_0 + tau*u_1;
+    y_1 = y_0 + tau*v_1;
+    z_1 = z_0 + tau*w_1;
+    
+    % Skriv över gammal vinkel och riktningar
+    u_0 = u_1;
+    v_0 = v_1;
+    w_0 = w_1;
+    
+    x_0 = x_1;
+    y_0 = y_1;
+    z_0 = z_1;
+    
+    theta_old = theta_new;
+    fi_old = fi_new;
+    
+    %Kollar vilken kroppsdel vi är i
+    Avrunda = [round(x_0), round(y_0), round(z_0)];
+    Kroppsdel = buk(Avrunda(1), Avrunda(2), Avrunda(3)); %Ger vilket index voxeln har
+    if Kroppsdel ~= 20 %Elektronen elimineras om den lämnat vänster cortex
+        elektronenergi = 0;
+    end
+end
+
+
+
+end
+
+depo
+sonderfall = elektroner/2.2713; %Summan av yieldsen av beta, konversion och auger
+dos = depo/sonderfall;
+dos
+
+function [elektronenergi] = bestamma_elektronenergi(L)
+fortsatt = 1;
+while fortsatt == 1
+R1 = rand();
+R_energi = R1*0.498; %0.498 MeV är maxenergi. Slumpar en energi
+R2 = rand();
+R3 = R2*0.0378; %0.0378 är maximala sannolikheten
+energivarden = L(:,1);
+% Hittar index på de närmsta energierna
+
+    [~, index1] = min(abs(energivarden - R_energi));
+    index2 = index1 + 1;
+    slh = L(:,2);
+    
+      %Linjärinterpolation
+    x1 = energivarden(index1);
+     if index2 > 101
+        index2 = 101;
+    end
+    x2 = energivarden(index2);
+   
+    y1 = slh(index1); %Värden på slh beroende på energi
+    y2 = slh(index2);
+    P1 = y1 + (R_energi - x1) * (y2 - y1) / (x2 - x1);
+    
+    if P1 <= R3
+        elektronenergi = R_energi;
+        fortsatt = 0;
+    end
+end
+end
+
+function [] = vinkel(Stoppingpower)
+theta = sqrt(-Stoppingpower*log(1-rand()));
+phi = rand()*2*pi;
+end
