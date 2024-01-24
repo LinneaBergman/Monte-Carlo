@@ -1,0 +1,166 @@
+tic;
+format long;
+elektroner = 10000000;  % Antal elektroner
+depo = 0; %Total deponerad energi i vänster cortex
+L = table2array(readtable("Lutetium Decay Data.xlsx")); %Sönderfallsdata för Lu-177
+Tvarsnitt = table2array(readtable("TVARSNITT_ELEKTRONER.xlsx")); %Tabelldata med räckvidd och bromsförmåga för elektroner
+energier = Tvarsnitt(:,1);
+Range = Tvarsnitt(:,2); %Kolumn med räckvidd
+SP = Tvarsnitt(:,5); %SP = stopping power (bromsförmåga)
+
+
+%VOXLAR
+% Define the file path and file properties
+file_path = 'D:\Files\Documents\GitHub\Monte-Carlo\FullPhantom.bin';
+X = 256; % Replace with your desired dimensions
+Y = 256;
+Z = 1200;
+voxelSize = 0.15; % cm
+% Open the binary file for reading
+fid = fopen(file_path, 'rb');
+if fid == -1
+error('Could not open the file.');
+end
+% Read the binary data
+raw_data = fread(fid, X * Y * Z, 'single', 0, 'ieee-le');
+% Close the file
+fclose(fid);
+% Reshape the raw data into a 3D array
+array_3d = reshape(raw_data, [X, Y, Z]);
+buk = array_3d(:, :, 731:821);% Delar av fantomet med njurar
+vanster_njure = find(buk == 20); %Linjär lista med alla voxlar i vänster njure
+[left_x, left_y, left_z] = ind2sub(size(buk), vanster_njure); %Gör koordinatmatris för alla voxlar
+leftkpos = [left_x, left_y, left_z]; %Matris med koordinater för varje voxel i vänster cortex
+
+rader = size(leftkpos, 1); %Antal voxlar i vänster cortex
+slumppos = randi(rader, 1, elektroner); %Radvektor med slumpade positioner i vänster cortex, lika lång som antalet elektroner
+elektronposition = leftkpos(slumppos,:); %En matris med slumpade positioner i vänster cortex
+
+
+% Simulerings-loop för varje elektron
+for elektron = 1:elektroner
+    elektrontyp = rand(); %Bestämmer vilken elektrontyp
+if elektrontyp > 0 && elektrontyp < 0.369
+    %Betasönderfall
+    elektronenergi = 0.2; %Vanligaste energin vid betasönderfall (MeV)
+elseif elektrontyp > 0.369 && elektrontyp < 0.426
+    %Konversionselektron
+    elektronenergi = 0.0475; %Den vanligaste energin för konversionselektroner (MeV)
+else
+    %Auger
+    elektronenergi = 0.000160; %Den vanligaste energin för augerelektroner (MeV)
+end
+elektronenergi = elektronenergi*1000000; %Får elektronenergi i eV istället för MeV
+
+%Alla elektroner börjar i vänster cortex
+startx = elektronposition(elektron,1); %Start X-koordinat i vänster cortex
+starty = elektronposition(elektron,2);%Start Y-koordinat
+startz = elektronposition(elektron,3);%Start Z-koordinat
+
+%Startvinklar
+theta_old = acos(1-2*rand());
+fi_old = 2*pi*rand();
+% Första riktningen
+u_0 = sin(theta_old)*cos(fi_old);
+v_0 = sin(theta_old)*sin(fi_old);
+w_0 = cos(theta_old);
+%Första steget. Interpolerar fram steglängden
+[~, index1] = min(abs(Tvarsnitt(:,1) - elektronenergi));
+minskenergi = elektronenergi-elektronenergi*0.02; %Interpolerar mellan nuvarande energin och 2% lägre energi
+[~, index2] = min(abs(Tvarsnitt(:,2)-minskenergi));
+    
+    x1 = energier(index1);
+    x2 = energier(index2);
+    y1 = Range(index1);
+    y2 = Range(index2);
+    stegl = y1 + (elektronenergi - x1) * (y2 - y1)/(x2 - x1); %Steglängd
+
+x_0 = startx + stegl*u_0; %Skriver över koordinaterna
+y_0 = starty + stegl*v_0;
+z_0 = startz + stegl*w_0;
+
+%Kollar vilken kroppsdel vi är i. Om elektronen lämnat buken elimineras
+%den.
+Avrunda = [round(x_0), round(y_0), round(z_0)];
+if Avrunda(1) < 1 || Avrunda(1) > 256 || Avrunda(2) < 1 || Avrunda(2) > 256 || Avrunda(3) < 1 || Avrunda(3) > 91
+    elektronenergi = 0;
+else
+    Kroppsdel = buk(Avrunda(1), Avrunda(2), Avrunda(3)); %Ger vilket index voxeln har
+    if Kroppsdel ~= 20 %Elektronen elimineras om den lämnat vänster cortex
+        elektronenergi = 0;
+    end
+end
+
+while elektronenergi > 50
+   
+    %Linjärinterpolation för bromsförmåga
+    [~, index1] = min(abs(Tvarsnitt(:,1) - elektronenergi));
+    index2 = index1 + 1;
+    x1 = energier(index1);
+    x2 = energier(index2);
+    y1 = SP(index1); %Värden på bromsförmåga beroende på energi
+    y2 = SP(index2);
+    Stoppingpower = y1 + (elektronenergi - x1) * (y2 - y1) / (x2 - x1);
+    
+    %Gångjärnsmetoden enligt PENELOPE-dokument
+    %Ta fram steglängden genom att linjärinterpolera range med energin
+    % Hittar index på de närmsta energierna
+    [~, index1] = min(abs(Tvarsnitt(:,1) - elektronenergi));
+    minskenergi = elektronenergi-elektronenergi*0.02;
+    [~, index2] = min(abs(Tvarsnitt(:,2)-minskenergi));
+    
+    x1 = energier(index1);
+    x2 = energier(index2);
+    y1 = Range(index1);
+    y2 = Range(index2);
+    stegl = y1 + (elektronenergi - x1) * (y2 - y1)/(x2 - x1);
+    
+    energi_minska = stegl*Stoppingpower; %Energin som elektronen deponerar vid växelverkan
+    elektronenergi = elektronenergi - energi_minska;
+    depo = depo + energi_minska;
+    
+    theta_new = sqrt(-Stoppingpower*log(1-rand())); %Samplar en ny vinkel med hjälp av bromsförmågan
+    fi_new = rand()*2*pi;
+    
+    %Roterar matrisen
+    % Ekvation 7.13 från Bielajew.
+    u_1 = u_0*cos(theta_new)+sin(theta_new)*(w_0*cos(fi_new)*cos(fi_old)-sin(fi_new)*sin(fi_old));
+    v_1 = v_0*cos(theta_new)+sin(theta_new)*(w_0*cos(fi_new)*sin(fi_old)+sin(fi_new)*cos(fi_old));
+    w_1 = w_0*cos(theta_new)-sin(theta_new)*sin(theta_old)*cos(fi_new);
+    
+    % Nästa position
+    x_1 = x_0 + stegl*u_1;
+    y_1 = y_0 + stegl*v_1;
+    z_1 = z_0 + stegl*w_1;
+    
+    % Skriv över gammal vinkel och riktningar
+    u_0 = u_1;
+    v_0 = v_1;
+    w_0 = w_1;
+    
+    x_0 = x_1;
+    y_0 = y_1;
+    z_0 = z_1;
+    
+    theta_old = theta_new; %Skriver över vinklarna
+    fi_old = fi_new;
+    
+    %Kollar vilken kroppsdel vi är i
+    Avrunda = [round(x_0), round(y_0), round(z_0)];
+    Kroppsdel = buk(Avrunda(1), Avrunda(2), Avrunda(3)); %Ger vilket index voxeln har
+    if Kroppsdel ~= 20 %Elektronen elimineras om den lämnat vänster cortex
+        elektronenergi = 0;
+    end
+end
+
+
+
+end
+
+depo %Totala deponerade energin i eV
+sonderfall = elektroner/2.2713; %Summan av utbytet av beta, konversionselektroner och augerelektroner från tabelldata
+dos = depo/sonderfall; %Dosen i eV per sönderfall
+dos
+toc
+
+
